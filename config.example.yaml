@@ -1,0 +1,47 @@
+# SmartNet seeder configuration (copy to config.yaml).
+# A default config.yaml is also auto-created on first run.
+
+# Where seeded blobs + state are stored (created if missing).
+data_dir: ./smartnet-seed-data
+
+# Disk budget for seeded app blobs, in gigabytes.
+storage_limit_gb: 5.0
+
+# HTTP trackers to learn the app directory from and announce to.
+trackers:
+  - http://159.69.188.60:7374
+  - http://91.99.119.119:7374
+
+# Where future seeding rewards should go. Provide EITHER an address ...
+reward_address: ""
+# ... OR a passphrase to derive the address from (SmartNet wallet scheme).
+reward_passphrase: ""
+
+# Seconds between directory refresh + announce heartbeats.
+poll_interval_secs: 30
+
+# Hide this node's direct IP (relay-only; no LAN mDNS advertise/resolve).
+relay_only: false
+
+# Contribution metrics: HTTP /metrics (JSON) + status page on this port (0 = off).
+metrics_port: 9466
+# How often to print a one-line seeding summary to the log (seconds).
+metrics_interval_secs: 300
+
+# How often to garbage-collect unused blobs (old versions / abandoned
+# downloads) from the store, keeping only currently-seeded apps (seconds).
+gc_interval_secs: 600
+
+# --- SmartNet public DHT bootstrap node (serverless discovery infrastructure) ---
+# Run a Mainline DHT node in SERVER mode on a fixed UDP port. This makes the
+# seeder a reachable bootstrap node so clients/providers behind NAT or with
+# closed UDP egress can still join the DHT through SmartNet infrastructure —
+# independent of n0/n1 and public BitTorrent routers. Default ON.
+dht_enabled: true
+# UDP port for the DHT bootstrap node. OPEN THIS IN THE FIREWALL (inbound UDP).
+# Then bake "<public_ip>:<dht_port>" into:
+#   • client:   env SMARTNET_DHT_BOOTSTRAP=<public_ip>:6881
+#   • provider: config.yaml network.dht_bootstrap: ["<public_ip>:6881"]
+# (The address 116.202.32.250:6881 is already baked into client/provider defaults.)
+dht_port: 6881
+
