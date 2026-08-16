@@ -1,5 +1,7 @@
 # smartnet-seeder
 
+![SmartNetSeeder.jpg](resources/SmartNetSeeder.jpg)
+
 Headless, GUI-less P2P **seeder** for the SmartNet network. Run it on any cheap
 VPS (no X / no webkit) to keep dApps alive 24/7 - it learns the app directory
 from the trackers, pulls each app's content-addressed blob over iroh-blobs and
