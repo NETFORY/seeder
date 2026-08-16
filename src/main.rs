@@ -7,7 +7,7 @@
  *   Headless, GUI-less P2P seeder for the SmartNet network. Runs on any
  *   cheap VPS (no X / no webkit): it joins the iroh-blobs swarm, learns the
  *   app directory from the HTTP trackers, pulls each app's content-addressed
- *   tar blob and re-serves the IDENTICAL blob 24/7 - multiplying availability
+ *   tar blob and re-serves the IDENTICAL blob 24/7 — multiplying availability
  *   ("seeding") so dApps stay reachable even when their authors are offline.
  *
  *   It speaks the exact same wire protocol as the desktop client:
@@ -19,7 +19,7 @@
  *       seeder's relay re-announce verifies on the tracker unchanged.
  *
  *   Config (config.yaml, auto-created on first run): storage budget (default
- *   5 GB), tracker list, and a reward address OR passphrase - reserved for the
+ *   5 GB), tracker list, and a reward address OR passphrase — reserved for the
  *   upcoming seeding-reward / proof-of-storage system.
  *
  *   Author: TechnoL0g
@@ -96,7 +96,7 @@ struct Config {
     gc_interval_secs: u64,
     /// Run a public SmartNet Mainline DHT bootstrap node (server mode, open UDP).
     /// Lets clients/providers behind NAT or closed UDP egress join the DHT via
-    /// this seeder's infrastructure - independent of n0/n1 and public BT routers.
+    /// this seeder's infrastructure — independent of n0/n1 and public BT routers.
     #[serde(default = "default_dht_enabled")]
     dht_enabled: bool,
     /// UDP port for the DHT bootstrap node (open this in the firewall). Bake the
@@ -231,10 +231,10 @@ struct Manifest {
     signature: String,
     #[serde(rename = "publicKey")]
     public_key: String,
-    /// developer address (manifest owner) - relayed for the Official Repository.
+    /// developer address (manifest owner) — relayed for the Official Repository.
     #[serde(default)]
     owner: String,
-    /// приватный (E2EE) dApp - в ре-анонс кладётся reveal-payload из access.json
+    /// приватный (E2EE) dApp — в ре-анонс кладётся reveal-payload из access.json
     #[serde(default)]
     private: Option<bool>,
 }
@@ -277,13 +277,13 @@ struct ProviderOut {
 /// A single download target with its seeding priority (Phase D).
 /// Phase G: headless-сидер начинает удалять приложения с истёкшим оплаченным
 /// периодом, когда занятость выделенного диска превышает этот порог (90%).
-/// Home/client-ноды этот бинарь НЕ запускают - их набор раздачи не трогается.
+/// Home/client-ноды этот бинарь НЕ запускают — их набор раздачи не трогается.
 const SEEDER_EVICT_FILL_RATIO: f64 = 0.90;
 
 #[derive(Debug, Clone)]
 struct Target {
     /// candidate provider endpoint ids that serve `hash` (tried in order until
-    /// one actually delivers the blob - a provider may announce an app it no
+    /// one actually delivers the blob — a provider may announce an app it no
     /// longer has, so we must fall back to the others).
     eids: Vec<String>,
     hash: String,
@@ -302,7 +302,7 @@ fn incentivized_enabled() -> bool {
 }
 
 // ============================================================
-//  Official Repository - on-chain registries (trusted developers +
+//  Official Repository — on-chain registries (trusted developers +
 //  approved dApps). Scanned on boot + every 24h; kept in memory for
 //  logging/metrics. Filtering is CLIENT-side (seeders mark, not censor).
 // ============================================================
@@ -424,7 +424,7 @@ fn spawn_official_scanner() {
                     Duration::from_secs(86_400)
                 }
                 Ok(Err(e)) => {
-                    tracing::warn!("official registry scan failed: {} - retry in 10 min", e);
+                    tracing::warn!("official registry scan failed: {} — retry in 10 min", e);
                     Duration::from_secs(600)
                 }
                 Err(_) => Duration::from_secs(600),
@@ -447,7 +447,7 @@ struct AnnounceApp {
     signature: String,
     #[serde(rename = "publicKey")]
     public_key: String,
-    /// developer address (manifest owner) - Official Repository passthrough.
+    /// developer address (manifest owner) — Official Repository passthrough.
     #[serde(default)]
     owner: String,
 }
@@ -532,7 +532,7 @@ fn load_or_create_secret(data_dir: &str) -> iroh::SecretKey {
 }
 
 /// АСИНХРОННЫЙ резолв bootstrap-узлов Mainline DHT в IP:port (n0_mainline в
-/// build() резолвит хосты СИНХРОННО - блокирует поток на таймаут DNS).
+/// build() резолвит хосты СИНХРОННО — блокирует поток на таймаут DNS).
 async fn resolve_dht_bootstrap() -> Vec<String> {
     const DEFAULTS: [&str; 4] = [
         "router.bittorrent.com:6881",
@@ -626,9 +626,9 @@ async fn start_node(
     let endpoint_id = endpoint.id().to_string();
     // Публичный SmartNet DHT bootstrap-узел: ОДИН Mainline-узел в SERVER mode на
     // фикс. UDP-порту (дефолтный порт Mainline = 6881, поэтому отдельный
-    // address_lookup-узел НЕ поднимаем - иначе конфликт «Address already in use»).
+    // address_lookup-узел НЕ поднимаем — иначе конфликт «Address already in use»).
     // Делает сидер достижимой точкой входа в DHT для клиентов/провайдеров за
-    // NAT/закрытым egress - без n0/n1 и публичных BT-роутеров. Хэндл храним для
+    // NAT/закрытым egress — без n0/n1 и публичных BT-роутеров. Хэндл храним для
     // телеметрии (/metrics: routing_table_size).
     let dht = if cfg.dht_enabled {
         let mut sb = Dht::builder();
@@ -644,7 +644,7 @@ async fn start_node(
                 Some(d)
             }
             Err(e) => {
-                tracing::warn!("DHT bootstrap-узел не запущен на :{} - {}", cfg.dht_port, e);
+                tracing::warn!("DHT bootstrap-узел не запущен на :{} — {}", cfg.dht_port, e);
                 None
             }
         }
@@ -690,7 +690,7 @@ async fn fetch_app(
     // Fetch from the provider, retrying transient failures.
     //
     // IMPORTANT: iroh-blobs 0.103 `download().await` resolves to `Ok(())` even when
-    // NOTHING transferred - its internal `complete()` only treats `Error`/`DownloadError`
+    // NOTHING transferred — its internal `complete()` only treats `Error`/`DownloadError`
     // items as failures and otherwise returns Ok when the provider's progress stream
     // ends (e.g. on `ProviderFailed`). So `Ok` is NOT proof the blob arrived. The
     // authoritative signal is the local blob STATUS after the call.
@@ -708,7 +708,7 @@ async fn fetch_app(
             Ok(BlobStatus::Complete { .. }) => break,
             Ok(BlobStatus::Partial { size }) => {
                 last_err = format!(
-                    "provider served only a partial blob ({} bytes) - the relay path is likely dropping bulk data",
+                    "provider served only a partial blob ({} bytes) — the relay path is likely dropping bulk data",
                     size.unwrap_or(0)
                 );
             }
@@ -741,7 +741,7 @@ async fn fetch_app(
     }
 }
 
-/// Read the full blob bytes from the store (no fragile filesystem export - the
+/// Read the full blob bytes from the store (no fragile filesystem export — the
 /// old `export()`-to-tmp-tar path could fail on a complete blob and mask the
 /// real reason as "provider served no data") and parse the app Manifest out of
 /// the in-memory tar. Returns (Manifest, blob_size) or a precise error.
@@ -756,7 +756,7 @@ async fn extract_manifest(node: &Node, h: Hash) -> Result<(Manifest, u64), Strin
     match manifest_from_tar(&bytes) {
         Some(mut m) => {
             // Приватный dApp: подпись сделана над ПУСТЫМ description, а участникам
-            // списка доступа нужен reveal-payload - реконструируем его из
+            // списка доступа нужен reveal-payload — реконструируем его из
             // access.json архива, чтобы ре-анонс сидера не «терял» метаданные.
             if m.private == Some(true) {
                 if let Some(p) = reveal_payload_from_tar(&bytes) {
@@ -771,7 +771,7 @@ async fn extract_manifest(node: &Node, h: Hash) -> Result<(Manifest, u64), Strin
 
 /// Reveal-payload приватного dApp из access.json архива: `§P1§` + b64({m, k}).
 /// m = зашифрованный компакт метаданных (privAnnounce), k = обёрнутые CEK по
-/// адресам (wrappedKeys). Ключей у сидера нет - он лишь переносит шифртекст.
+/// адресам (wrappedKeys). Ключей у сидера нет — он лишь переносит шифртекст.
 fn reveal_payload_from_tar(tar_bytes: &[u8]) -> Option<String> {
     use std::io::Read;
     let mut ar = tar::Archive::new(std::io::Cursor::new(tar_bytes));
@@ -797,7 +797,7 @@ fn reveal_payload_from_tar(tar_bytes: &[u8]) -> Option<String> {
 
 /// Parse the SmartNet Manifest from an in-memory app tar. Prefers the ROOT
 /// `content.json` (the real manifest) and only falls back to a nested
-/// `*/content.json` if no root one parses - apps that ship their own
+/// `*/content.json` if no root one parses — apps that ship their own
 /// `content.json` inside the bundle used to shadow the manifest (tar order),
 /// which made the manifest unparseable and the fetch falsely "fail".
 fn manifest_from_tar(tar_bytes: &[u8]) -> Option<Manifest> {
@@ -866,7 +866,7 @@ fn sanitize(s: &str) -> String {
 async fn check_trackers(cfg: &Config) {
     println!("\nSmartNet seeder · tracker connectivity check\n");
     if cfg.trackers.is_empty() {
-        println!("  (no trackers configured - add them under `trackers:` in config.yaml)\n");
+        println!("  (no trackers configured — add them under `trackers:` in config.yaml)\n");
         return;
     }
     println!("  {:<42}  {:>7}  {:>5}  {}", "TRACKER", "STATUS", "APPS", "DETAIL");
@@ -909,7 +909,7 @@ async fn check_trackers(cfg: &Config) {
     println!("\n  {}/{} tracker(s) reachable.", ok_count, cfg.trackers.len());
     println!(
         "  If a tracker is OK but shows 0 apps while your desktop is online, the desktop\n  \
-         is announcing to a DIFFERENT tracker - make the seeder's `trackers:` list match\n  \
+         is announcing to a DIFFERENT tracker — make the seeder's `trackers:` list match\n  \
          the desktop client's tracker list.\n"
     );
 }
@@ -992,7 +992,7 @@ async fn tracker_announce(tracker: String, body: String) -> bool {
 }
 
 /// Build a signed heartbeat JSON body (Phase F). Returns None when no signing
-/// secret (passphrase) is configured - an explicit reward_address alone cannot
+/// secret (passphrase) is configured — an explicit reward_address alone cannot
 /// sign, so the node earns no uptime credit until a passphrase is set.
 fn build_heartbeat(secret: &str, active_app_ids: &[String]) -> Option<String> {
     let secret = secret.trim();
@@ -1085,7 +1085,7 @@ fn save_state(cfg: &Config, state: &HashMap<String, SeededApp>) {
 }
 
 // ============================================================
-//  Metrics - contribution stats for VPS operators / reward ranking
+//  Metrics — contribution stats for VPS operators / reward ranking
 // ============================================================
 
 /// Per-app result of the most recent fetch attempt, surfaced on `/metrics`
@@ -1290,7 +1290,7 @@ async fn serve_metrics(metrics: Arc<Metrics>, port: u16) {
     let listener = match tokio::net::TcpListener::bind(("0.0.0.0", port)).await {
         Ok(l) => l,
         Err(e) => {
-            tracing::warn!("metrics endpoint disabled - bind :{} failed: {}", port, e);
+            tracing::warn!("metrics endpoint disabled — bind :{} failed: {}", port, e);
             return;
         }
     };
@@ -1350,7 +1350,7 @@ async fn metrics_logger(metrics: Arc<Metrics>, interval_secs: u64) {
 async fn main() {
     // Подхватываем настройки из `.env` (если файл рядом с бинарником или в текущей
     // директории). Удобно для VPS: одна правка `.env` вместо ручного экспорта.
-    // Отсутствие файла - не ошибка: значения всё ещё можно задать через shell
+    // Отсутствие файла — не ошибка: значения всё ещё можно задать через shell
     // или systemd `EnvironmentFile=`.
     let _ = dotenvy::dotenv();
 
@@ -1382,7 +1382,7 @@ async fn main() {
     spawn_official_scanner();
     tracing::info!(
         "incentivized seeding: {} (toggle with ENABLE_INCENTIVIZED_SEEDING)",
-        if incentivized { "ON - priority eviction active" } else { "OFF - standard P2P seeding" }
+        if incentivized { "ON — priority eviction active" } else { "OFF — standard P2P seeding" }
     );
     tracing::info!(
         "SmartNet seeder starting · data_dir={} · budget={:.1} GB · trackers={} · reward={}",
@@ -1394,7 +1394,7 @@ async fn main() {
     tracing::info!("configured trackers: {}", cfg.trackers.join(", "));
     if cfg.trackers.is_empty() {
         tracing::warn!(
-            "no trackers configured - the seeder cannot learn the app directory. \
+            "no trackers configured — the seeder cannot learn the app directory. \
              Set `trackers:` in {} to the SAME URLs your desktop client announces to.",
             cfg_path
         );
@@ -1427,7 +1427,7 @@ async fn main() {
         let trackers = cfg.trackers.clone();
         let hb_state = state.clone();
         if secret.is_empty() {
-            tracing::warn!("no reward_passphrase set - heartbeats disabled (no uptime credit)");
+            tracing::warn!("no reward_passphrase set — heartbeats disabled (no uptime credit)");
         } else {
             tokio::spawn(async move {
                 let mut tick = tokio::time::interval(Duration::from_secs(300));
@@ -1465,7 +1465,7 @@ async fn main() {
                 u
             }
             None => {
-                tracing::warn!("could not auto-detect public IP - not advertising metrics URL");
+                tracing::warn!("could not auto-detect public IP — not advertising metrics URL");
                 String::new()
             }
         }
@@ -1534,13 +1534,20 @@ async fn main() {
     // Wait for iroh to come online (connected to a home relay) before the first
     // seeding cycle. Without this, the very first downloads fire while the relay
     // handshake is still in progress and fail with Error::Io. Bounded by a
-    // timeout so we never hang if relays are unreachable - retries recover later.
+    // timeout so we never hang if relays are unreachable — retries recover later.
     match tokio::time::timeout(Duration::from_secs(20), node.endpoint.online()).await {
-        Ok(_) => tracing::info!("iroh online - home relay connected; starting seeding loop"),
+        Ok(_) => tracing::info!("iroh online — home relay connected; starting seeding loop"),
         Err(_) => {
-            tracing::warn!("iroh not online after 20s (relays unreachable?) - starting anyway; downloads will retry")
+            tracing::warn!("iroh not online after 20s (relays unreachable?) — starting anyway; downloads will retry")
         }
     }
+
+    // Экспоненциальный backoff для целей, падающих много циклов подряд:
+    // 1-я неудача → пауза 5 мин, 2-я → 15 мин, 3-я и далее → 60 мин (max).
+    // Смена целевого хэша (переопубликация) сбрасывает backoff — новый блоб
+    // пробуем сразу. Защищает CPU/сеть от бесплодных download-штормов каждые
+    // 30 секунд (QUIC/relay-диалы к провайдерам, у которых блоба нет).
+    let mut fetch_backoff: HashMap<String, (String, u32, Instant)> = HashMap::new();
 
     loop {
         // 0) honor owner-signed deletions: gather tombstoned ids from the
@@ -1596,7 +1603,13 @@ async fn main() {
                     if p.hash.is_empty() || p.endpoint_id == node.endpoint_id {
                         continue; // skip empties and our own announces
                     }
-                    let ver = p.version.max(app.version);
+                    // ВАЖНО: только СОБСТВЕННАЯ версия провайдера (p.version).
+                    // Раньше здесь было p.version.max(app.version) — из-за этого
+                    // провайдер со СТАРЫМ хэшем «наследовал» новейшую версию
+                    // приложения, его устаревший блоб становился целью, а нода с
+                    // настоящим новым блобом отбрасывалась (ver==entry.ver при
+                    // другом hash). Итог: вечный «blob absent on provider».
+                    let ver = p.version;
                     let entry = best.entry(app.id.clone()).or_insert(Target {
                         eids: Vec::new(),
                         hash: p.hash.clone(),
@@ -1608,13 +1621,13 @@ async fn main() {
                     entry.weight = app.priority_weight;
                     entry.boost = app.boost_pool;
                     if ver > entry.ver {
-                        // newer version supersedes - reset the provider set.
+                        // newer version supersedes — reset the provider set.
                         entry.ver = ver;
                         entry.hash = p.hash.clone();
                         entry.name = app.name.clone();
                         entry.eids = vec![p.endpoint_id.clone()];
                     } else if ver == entry.ver && p.hash == entry.hash {
-                        // another provider for the SAME blob - add as fallback.
+                        // another provider for the SAME blob — add as fallback.
                         if !entry.eids.contains(&p.endpoint_id) {
                             entry.eids.push(p.endpoint_id.clone());
                         }
@@ -1627,7 +1640,7 @@ async fn main() {
         let mut targets: Vec<(String, Target)> = best.into_iter().collect();
         targets.sort_by(|a, b| b.1.weight.cmp(&a.1.weight));
 
-        // 1b) Phase G - headless disk hygiene: когда занятость диска > порога (90%),
+        // 1b) Phase G — headless disk hygiene: когда занятость диска > порога (90%),
         //     освобождаем место, удаляя приложения с ЗАВЕРШЁННЫМ оплаченным периодом
         //     (paid && secondsRemaining==0). Активные (оплачиваемые) и приложения,
         //     статус которых трекеры сейчас не подтверждают, НЕ трогаем.
@@ -1636,7 +1649,7 @@ async fn main() {
             let mut used_now: u64 = state.lock().await.values().map(|s| s.size).sum();
             if used_now > evict_threshold {
                 // кандидаты: наши приложения, которые трекер знает как оплаченные,
-                // но их окно истекло (remaining==0). Наименьший вес - первым.
+                // но их окно истекло (remaining==0). Наименьший вес — первым.
                 let mut candidates: Vec<(String, u64, u32)> = {
                     let st = state.lock().await;
                     st.iter()
@@ -1660,7 +1673,7 @@ async fn main() {
                             freed += sz;
                             removed += 1;
                             tracing::info!(
-                                "expired-paid evict {}… ({:.1} MB) - paid seeding window ended, disk >90%",
+                                "expired-paid evict {}… ({:.1} MB) — paid seeding window ended, disk >90%",
                                 &id[..id.len().min(10)],
                                 sz as f64 / 1e6
                             );
@@ -1693,6 +1706,18 @@ async fn main() {
                     continue; // already seeding this exact blob
                 }
             }
+            // Backoff: эта цель недавно падала — пропускаем до конца паузы.
+            if let Some((bh, fails, until)) = fetch_backoff.get(id) {
+                if bh == hash && Instant::now() < *until {
+                    tracing::debug!(
+                        "backoff {}… — {} fail(s), retry in {}s",
+                        &id[..id.len().min(10)],
+                        fails,
+                        until.saturating_duration_since(Instant::now()).as_secs()
+                    );
+                    continue;
+                }
+            }
             let is_new = { !state.lock().await.contains_key(id) };
             if is_new && used >= limit {
                 // Over budget. With incentivized seeding ON, a BOOSTED app may
@@ -1719,7 +1744,7 @@ async fn main() {
                     }
                 }
                 if !evicted {
-                    continue; // no eviction possible - skip this new app
+                    continue; // no eviction possible — skip this new app
                 }
             }
             // Try each candidate provider in turn until one actually delivers
@@ -1749,6 +1774,7 @@ async fn main() {
             }
             match fetched {
                 Some((m, size, provider_short)) => {
+                    fetch_backoff.remove(id);
                     metrics.set_fetch(
                         id,
                         FetchEntry {
@@ -1788,7 +1814,7 @@ async fn main() {
                         },
                     );
                     tracing::info!(
-                        "seeding {} v{} ({:.1} KB) - {} app(s), {:.1}/{:.1} MB",
+                        "seeding {} v{} ({:.1} KB) — {} app(s), {:.1}/{:.1} MB",
                         id,
                         m.version.unwrap_or(1),
                         size as f64 / 1e3,
@@ -1799,6 +1825,25 @@ async fn main() {
                     save_state(&cfg, &st);
                 }
                 None => {
+                    // Наращиваем backoff (5 → 15 → 60 мин, max 60); смена хэша
+                    // цели обнуляет счётчик — новый блоб пробуем без задержки.
+                    let fails = match fetch_backoff.get(id) {
+                        Some((bh, f, _)) if bh == hash => f + 1,
+                        _ => 1,
+                    };
+                    let pause_min: u64 = match fails {
+                        1 => 5,
+                        2 => 15,
+                        _ => 60,
+                    };
+                    fetch_backoff.insert(
+                        id.clone(),
+                        (
+                            hash.clone(),
+                            fails,
+                            Instant::now() + Duration::from_secs(pause_min * 60),
+                        ),
+                    );
                     let le = last_e.to_lowercase();
                     let status = if le.contains("partial") {
                         "partial"
@@ -1824,10 +1869,12 @@ async fn main() {
                         },
                     );
                     tracing::warn!(
-                        "skip {}… - no provider delivered the blob ({} tried): {}",
+                        "skip {}… — no provider delivered the blob ({} tried): {}; backoff {} min (fail #{})",
                         &id[..id.len().min(10)],
                         tgt.eids.len(),
-                        last_e
+                        last_e,
+                        pause_min,
+                        fails
                     )
                 }
             }
@@ -1851,8 +1898,8 @@ async fn main() {
                 owner: s.announce.owner.clone(),
             })
             .collect();
-        // 3) heartbeat-announce to every tracker. We ALWAYS announce - even
-        //    with zero seeded apps - so the tracker registers our metricsUrl
+        // 3) heartbeat-announce to every tracker. We ALWAYS announce — even
+        //    with zero seeded apps — so the tracker registers our metricsUrl
         //    and we appear on the public Network Map as soon as we're online.
         let had_apps = !apps.is_empty();
         let req = AnnounceReq {
@@ -1879,10 +1926,10 @@ async fn main() {
         }
         if !had_apps {
             if targets.is_empty() {
-                tracing::info!("nothing to seed yet - waiting for the directory to populate");
+                tracing::info!("nothing to seed yet — waiting for the directory to populate");
             } else {
                 tracing::info!(
-                    "directory lists {} app(s) but none are reachable yet - providers may be offline; will retry next cycle",
+                    "directory lists {} app(s) but none are reachable yet — providers may be offline; will retry next cycle",
                     targets.len()
                 );
             }

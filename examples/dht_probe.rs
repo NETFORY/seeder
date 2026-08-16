@@ -6,7 +6,7 @@ use n0_mainline::Dht;
 
 #[tokio::main]
 async fn main() {
-    // Exactly as in the client: SmartNet IP is added ON TOP of default routers.
+    // Точно как в клиенте: SmartNet IP добавляется ПОВЕРХ дефолтных роутеров.
     let extra: Vec<String> = vec!["116.202.32.250:6881".to_string()];
     let built = tokio::task::spawn_blocking(move || {
         let mut mdb = Dht::builder();
