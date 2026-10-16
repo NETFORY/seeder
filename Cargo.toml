@@ -1,6 +1,6 @@
 [package]
 name = "smartnet-seeder"
-version = "1.4.0"
+version = "1.5.0"
 edition = "2021"
 description = "SmartNet headless P2P seeder — keep dApps alive 24/7 from a cheap VPS (no GUI)."
 

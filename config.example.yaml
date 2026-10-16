@@ -7,6 +7,13 @@ data_dir: ./smartnet-seed-data
 # Disk budget for seeded app blobs, in gigabytes.
 storage_limit_gb: 5.0
 
+# --- Netfory messenger media seeding (v1.5.0) ---
+# Dedicated budget (GB) for chat media (photos/audio/files/video ≤ 500 MB) in a
+# SEPARATE store (<data_dir>/media-blobs) with its own iroh endpoint — never
+# mixed with the dApp budget above. 0 = off. e.g. 5 = 5 GB. When usage exceeds
+# 90 % the oldest 50 % is evicted. Clients announce media via POST /media/announce.
+media_storage_gb: 0
+
 # HTTP trackers to learn the app directory from and announce to.
 trackers:
   - http://159.69.188.60:7374
@@ -44,4 +51,7 @@ dht_enabled: true
 #   • provider: config.yaml network.dht_bootstrap: ["<public_ip>:6881"]
 # (The address 116.202.32.250:6881 is already baked into client/provider defaults.)
 dht_port: 6881
+
+# 0 - disabled, 10GB for media content
+media_storage_gb: 10
 

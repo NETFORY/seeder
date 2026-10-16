@@ -48,6 +48,11 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tokio::sync::Mutex;
 
+mod media;
+
+/// Версия бинарника (из Cargo.toml) — показывается на статус-странице и в /metrics.
+const VERSION: &str = env!("CARGO_PKG_VERSION");
+
 const DEFAULT_TRACKERS: &[&str] = &[
     "http://159.69.188.60:7374",
     "http://91.99.119.119:7374",
@@ -104,6 +109,12 @@ struct Config {
     /// provider config.yaml (network.dht_bootstrap) so others bootstrap via it.
     #[serde(default = "default_dht_port")]
     dht_port: u16,
+    /// Медиа мессенджера Netfory (фото/аудио/файлы/видео чатов): бюджет в ГБ под
+    /// ОТДЕЛЬНОЕ хранилище <data_dir>/media-blobs с отдельным iroh-endpoint.
+    /// 0 = выключено (по умолчанию). Напр. 5 = 5 ГБ. При заполнении >90% удаляются
+    /// 50% самых старых медиа. Клиенты анонсируют медиа через POST /media/announce.
+    #[serde(default)]
+    media_storage_gb: f64,
 }
 
 fn default_dht_enabled() -> bool {
@@ -140,6 +151,7 @@ impl Default for Config {
             gc_interval_secs: default_gc_interval(),
             dht_enabled: default_dht_enabled(),
             dht_port: default_dht_port(),
+            media_storage_gb: 0.0,
         }
     }
 }
@@ -175,7 +187,7 @@ fn load_or_init_config(path: &Path) -> Config {
     }
     let cfg = Config::default();
     if let Ok(yaml) = serde_yaml::to_string(&cfg) {
-        let banner = "# SmartNet seeder configuration.\n# storage_limit_gb: disk budget for seeded blobs.\n# reward_address / reward_passphrase: where future seeding rewards go.\n";
+        let banner = "# SmartNet seeder configuration.\n# storage_limit_gb: disk budget for seeded dApp blobs.\n# media_storage_gb: budget for Netfory chat media (0 = off; e.g. 5 = 5 GB, separate store).\n# reward_address / reward_passphrase: where future seeding rewards go.\n";
         let _ = std::fs::write(path, format!("{}{}", banner, yaml));
         tracing::info!("wrote default config to {}", path.display());
     }
@@ -477,6 +489,9 @@ struct SeededApp {
     weight: u32,
     #[serde(default)]
     boost: u64,
+    /// короткий endpointId провайдера, у которого блоб был скачан (диагностика)
+    #[serde(default)]
+    provider: String,
     announce: AnnounceAppOwned,
 }
 
@@ -737,6 +752,8 @@ async fn fetch_app(
     // manifest can't be parsed.
     match extract_manifest(node, h).await {
         Ok(res) => Ok(res),
+        // «blob absent» + ошибка чтения из пустого стора — шум; оставляем суть.
+        Err(_) if last_err.contains("no data") => Err(describe_download_error(&last_err)),
         Err(e) => Err(describe_download_error(&format!("{}; {}", last_err, e))),
     }
 }
@@ -829,8 +846,8 @@ fn manifest_from_tar(tar_bytes: &[u8]) -> Option<Manifest> {
 /// keeping the original text in brackets for deeper debugging.
 fn describe_download_error(raw: &str) -> String {
     let l = raw.to_lowercase();
-    let reason = if l.contains("not found") || l.contains("notfound") || l.contains("missing") {
-        "blob not found on provider (stale or changed hash)"
+    let reason = if l.contains("not found") || l.contains("notfound") || l.contains("missing") || l.contains("absent") || l.contains("no data") {
+        "blob not found on provider (provider GC'd it or announces a stale hash — provider must re-announce)"
     } else if l.contains("verif") || l.contains("mismatch") || l.contains("integrity") {
         "blob failed integrity check"
     } else if l.contains("timeout") || l.contains("timed out") {
@@ -1141,6 +1158,9 @@ struct Metrics {
     dht_nodes: AtomicU64,
     /// per-app last fetch result (id -> entry).
     fetch: std::sync::Mutex<HashMap<String, FetchEntry>>,
+    /// медиа-сидинг мессенджера (None = выключен в конфиге)
+    media: Option<Arc<media::MediaSeeder>>,
+    media_storage_gb: f64,
 }
 
 impl Metrics {
@@ -1152,6 +1172,36 @@ impl Metrics {
     fn set_fetch(&self, id: &str, entry: FetchEntry) {
         if let Ok(mut g) = self.fetch.lock() {
             g.insert(id.to_string(), entry);
+        }
+    }
+
+    /// Приложение больше не раздаём (tombstone / eviction) — убираем из таблицы,
+    /// чтобы «APPS SEEDED» и список диагностики всегда совпадали.
+    fn remove_fetch(&self, id: &str) {
+        if let Ok(mut g) = self.fetch.lock() {
+            g.remove(id);
+        }
+    }
+
+    /// Строка медиа-статистики для JSON.
+    fn media_json(&self) -> String {
+        match &self.media {
+            Some(m) => {
+                let b = m.bytes.load(Ordering::Relaxed);
+                format!(
+                    "\"mediaEnabled\":true,\"mediaStorageGb\":{},\"mediaBytes\":{},\"mediaGb\":{:.4},\"mediaItems\":{},\"mediaEndpointId\":\"{}\",\"mediaFetchedOk\":{},\"mediaFetchedFail\":{},\"mediaEvicted\":{},\"mediaMaxFileBytes\":{}",
+                    self.media_storage_gb,
+                    b,
+                    b as f64 / 1e9,
+                    m.items.load(Ordering::Relaxed),
+                    m.endpoint_id,
+                    m.fetched_ok.load(Ordering::Relaxed),
+                    m.fetched_fail.load(Ordering::Relaxed),
+                    m.evicted.load(Ordering::Relaxed),
+                    media::MEDIA_MAX_FILE_BYTES,
+                )
+            }
+            None => "\"mediaEnabled\":false,\"mediaStorageGb\":0,\"mediaBytes\":0,\"mediaGb\":0,\"mediaItems\":0,\"mediaEndpointId\":\"\"".to_string(),
         }
     }
 
@@ -1184,7 +1234,8 @@ impl Metrics {
             format!("[{}]", parts.join(","))
         };
         format!(
-            "{{\"uptimeSecs\":{},\"appsSeeded\":{},\"bytesSeeded\":{},\"gbSeeded\":{:.4},\"storageLimitGb\":{},\"endpointId\":\"{}\",\"rewardAddress\":\"{}\",\"trackers\":{},\"lastAnnounceAcks\":{},\"dhtBootstrapServer\":{},\"dhtPort\":{},\"dhtNodes\":{},\"apps\":{}}}",
+            "{{\"version\":\"{}\",\"uptimeSecs\":{},\"appsSeeded\":{},\"bytesSeeded\":{},\"gbSeeded\":{:.4},\"storageLimitGb\":{},\"endpointId\":\"{}\",\"rewardAddress\":\"{}\",\"trackers\":{},\"lastAnnounceAcks\":{},\"dhtBootstrapServer\":{},\"dhtPort\":{},\"dhtNodes\":{},{},\"apps\":{}}}",
+            VERSION,
             self.uptime_secs(),
             self.apps.load(Ordering::Relaxed),
             bytes,
@@ -1197,6 +1248,7 @@ impl Metrics {
             self.dht_enabled,
             self.dht_port,
             self.dht_nodes.load(Ordering::Relaxed),
+            self.media_json(),
             apps_json,
         )
     }
@@ -1241,8 +1293,20 @@ impl Metrics {
                     .join("")
             }
         };
+        let (media_row, media_ep) = match &self.media {
+            Some(m) => (
+                format!(
+                    "{:.3} GB / {} GB · {} files",
+                    m.bytes.load(Ordering::Relaxed) as f64 / 1e9,
+                    self.media_storage_gb,
+                    m.items.load(Ordering::Relaxed)
+                ),
+                m.endpoint_id.clone(),
+            ),
+            None => ("OFF (media_storage_gb: 0)".to_string(), "—".to_string()),
+        };
         format!(
-            "<!doctype html><html><head><meta charset=utf-8><title>SmartNet Seeder</title>\
+            "<!doctype html><html><head><meta charset=utf-8><title>SmartNet Seeder v{ver}</title>\
 <meta name=viewport content='width=device-width,initial-scale=1'>\
 <meta http-equiv=refresh content=15>\
 <style>body{{background:#0b0e14;color:#cdd6f4;font:14px ui-monospace,monospace;margin:0;padding:40px}}\
@@ -1254,37 +1318,43 @@ h2{{color:#89b4fa;font-size:13px;letter-spacing:.08em;margin-top:36px;text-trans
 table{{border-collapse:collapse;margin-top:12px;width:100%;font-size:12px}}\
 td,th{{text-align:left;padding:6px 14px 6px 0;border-bottom:1px solid #1e2233;vertical-align:top}}\
 th{{color:#6c7086;text-transform:uppercase;font-size:10px;letter-spacing:.08em}}</style></head><body>\
-<h1>// SMARTNET SEEDER</h1><div class=g>\
+<h1>// SMARTNET SEEDER v{ver}</h1><div class=g>\
 <span class=k>uptime</span><span class=v>{}d {:02}h {:02}m</span>\
 <span class=k>apps seeded</span><span class=v>{}</span>\
 <span class=k>seeded</span><span class=v>{:.3} GB / {} GB</span>\
+<span class=k>media</span><span class=v>{}</span>\
 <span class=k>tracker acks</span><span class=v>{} / {}</span>\
 <span class=k>reward addr</span><span class=v>{}</span>\
 <span class=k>endpoint id</span><span class=v>{}</span>\
+<span class=k>media endpoint</span><span class=v>{}</span>\
 <span class=k>dht bootstrap</span><span class=v>{}</span>\
 </div>\
 <h2>// fetch diagnostics</h2>\
 <table><tr><th>app</th><th>status</th><th>provider</th><th>detail / size</th></tr>{}</table>\
-<p style='margin-top:24px;color:#6c7086'>auto-refresh 15s · JSON: <a href=/metrics>/metrics</a></p></body></html>",
+<p style='margin-top:24px;color:#6c7086'>auto-refresh 15s · JSON: <a href=/metrics>/metrics</a> · media: <a href=/media>/media</a></p></body></html>",
             d, h, m,
             self.apps.load(Ordering::Relaxed),
             bytes as f64 / 1e9,
             self.storage_limit_gb,
+            html_escape(&media_row),
             self.last_acks.load(Ordering::Relaxed),
             self.trackers,
             if self.reward.is_empty() { "(none)" } else { &self.reward },
             self.endpoint_id,
+            html_escape(&media_ep),
             if self.dht_enabled {
                 format!("ON :{} · {} nodes", self.dht_port, self.dht_nodes.load(Ordering::Relaxed))
             } else {
                 "OFF".to_string()
             },
             rows,
+            ver = VERSION,
         )
     }
 }
 
-/// Minimal dependency-free HTTP/1.1 server for the metrics endpoint.
+/// Минимальный HTTP/1.1 сервер без зависимостей: /metrics (JSON), статус-страница,
+/// и медиа-API мессенджера (POST /media/announce, GET /media/has, GET /media).
 async fn serve_metrics(metrics: Arc<Metrics>, port: u16) {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     let listener = match tokio::net::TcpListener::bind(("0.0.0.0", port)).await {
@@ -1294,7 +1364,7 @@ async fn serve_metrics(metrics: Arc<Metrics>, port: u16) {
             return;
         }
     };
-    tracing::info!("metrics endpoint: http://0.0.0.0:{}/  (JSON at /metrics)", port);
+    tracing::info!("metrics endpoint: http://0.0.0.0:{}/  (JSON at /metrics, media API at /media/*)", port);
     loop {
         let (mut sock, _) = match listener.accept().await {
             Ok(x) => x,
@@ -1302,23 +1372,163 @@ async fn serve_metrics(metrics: Arc<Metrics>, port: u16) {
         };
         let metrics = metrics.clone();
         tokio::spawn(async move {
-            let mut buf = [0u8; 1024];
-            let n = sock.read(&mut buf).await.unwrap_or(0);
-            let req = String::from_utf8_lossy(&buf[..n]);
-            let path = req.split_whitespace().nth(1).unwrap_or("/");
-            let (ctype, body) = if path.starts_with("/metrics") {
-                ("application/json", metrics.json())
-            } else {
-                ("text/html; charset=utf-8", metrics.html())
+            // читаем заголовки целиком (+ тело по Content-Length, ≤ 64 КБ), с таймаутом
+            let mut buf: Vec<u8> = Vec::with_capacity(2048);
+            let mut tmp = [0u8; 2048];
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+            let (head_end, body_len) = loop {
+                let n = match tokio::time::timeout_at(deadline, sock.read(&mut tmp)).await {
+                    Ok(Ok(0)) | Err(_) => return,
+                    Ok(Err(_)) => return,
+                    Ok(Ok(n)) => n,
+                };
+                buf.extend_from_slice(&tmp[..n]);
+                if let Some(pos) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
+                    let head = String::from_utf8_lossy(&buf[..pos]).to_string();
+                    let cl = head
+                        .lines()
+                        .find_map(|l| {
+                            let (k, v) = l.split_once(':')?;
+                            if k.trim().eq_ignore_ascii_case("content-length") {
+                                v.trim().parse::<usize>().ok()
+                            } else {
+                                None
+                            }
+                        })
+                        .unwrap_or(0);
+                    if cl > 65_536 {
+                        let _ = sock
+                            .write_all(b"HTTP/1.1 413 Payload Too Large\r\nConnection: close\r\nContent-Length: 0\r\n\r\n")
+                            .await;
+                        return;
+                    }
+                    break (pos + 4, cl);
+                }
+                if buf.len() > 16_384 {
+                    return;
+                }
             };
+            while buf.len() < head_end + body_len {
+                let n = match tokio::time::timeout_at(deadline, sock.read(&mut tmp)).await {
+                    Ok(Ok(0)) | Err(_) => return,
+                    Ok(Err(_)) => return,
+                    Ok(Ok(n)) => n,
+                };
+                buf.extend_from_slice(&tmp[..n]);
+            }
+            let head = String::from_utf8_lossy(&buf[..head_end]).to_string();
+            let mut first = head.split_whitespace();
+            let method = first.next().unwrap_or("GET").to_string();
+            let target = first.next().unwrap_or("/").to_string();
+            let (path, query) = target.split_once('?').unwrap_or((target.as_str(), ""));
+            let body = String::from_utf8_lossy(&buf[head_end..head_end + body_len.min(buf.len() - head_end)]).to_string();
+
+            let (status, ctype, out) = route(&metrics, &method, path, query, &body).await;
             let resp = format!(
-                "HTTP/1.1 200 OK\r\nContent-Type: {}\r\nContent-Length: {}\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\n\r\n{}",
+                "HTTP/1.1 {}\r\nContent-Type: {}\r\nContent-Length: {}\r\nAccess-Control-Allow-Origin: *\r\nAccess-Control-Allow-Methods: GET, POST, OPTIONS\r\nAccess-Control-Allow-Headers: Content-Type\r\nConnection: close\r\n\r\n{}",
+                status,
                 ctype,
-                body.len(),
-                body
+                out.len(),
+                out
             );
             let _ = sock.write_all(resp.as_bytes()).await;
         });
+    }
+}
+
+/// Значение query-параметра `key` (без percent-decoding — хэши/ID алфанумерные).
+fn query_param<'a>(query: &'a str, key: &str) -> Option<&'a str> {
+    query.split('&').find_map(|kv| {
+        let (k, v) = kv.split_once('=')?;
+        if k == key { Some(v) } else { None }
+    })
+}
+
+async fn route(
+    metrics: &Arc<Metrics>,
+    method: &str,
+    path: &str,
+    query: &str,
+    body: &str,
+) -> (&'static str, &'static str, String) {
+    const JSON: &str = "application/json";
+    if method == "OPTIONS" {
+        return ("204 No Content", JSON, String::new());
+    }
+    match (method, path) {
+        (_, "/metrics") => ("200 OK", JSON, metrics.json()),
+        ("POST", "/media/announce") => {
+            let Some(m) = &metrics.media else {
+                return ("404 Not Found", JSON, "{\"ok\":false,\"error\":\"media seeding disabled on this seeder\"}".into());
+            };
+            let req: media::AnnounceIn = match serde_json::from_str(body) {
+                Ok(r) => r,
+                Err(e) => {
+                    return ("400 Bad Request", JSON, format!("{{\"ok\":false,\"error\":\"bad json: {}\"}}", json_escape(&e.to_string())));
+                }
+            };
+            match m.announce(req).await {
+                Ok(st) => (
+                    "200 OK",
+                    JSON,
+                    format!("{{\"ok\":true,\"status\":\"{}\",\"mediaEndpointId\":\"{}\"}}", st, m.endpoint_id),
+                ),
+                Err(e) => {
+                    let code = if e.contains("queue full") { "429 Too Many Requests" } else { "400 Bad Request" };
+                    (code, JSON, format!("{{\"ok\":false,\"error\":\"{}\"}}", json_escape(&e)))
+                }
+            }
+        }
+        ("GET", "/media/has") => {
+            let h = query_param(query, "h").unwrap_or("");
+            if h.parse::<iroh_blobs::Hash>().is_err() {
+                return ("400 Bad Request", JSON, "{\"ok\":false,\"error\":\"bad hash\"}".into());
+            }
+            let have = match &metrics.media {
+                Some(m) => m.has(h).await,
+                None => false,
+            };
+            (
+                "200 OK",
+                JSON,
+                format!(
+                    "{{\"have\":{},\"mediaEndpointId\":\"{}\"}}",
+                    have,
+                    metrics.media.as_ref().map(|m| m.endpoint_id.as_str()).unwrap_or("")
+                ),
+            )
+        }
+        ("GET", "/media") => {
+            let Some(m) = &metrics.media else {
+                return ("200 OK", JSON, "{\"enabled\":false,\"items\":[]}".into());
+            };
+            let items: Vec<String> = m
+                .list(500)
+                .await
+                .into_iter()
+                .map(|(h, it)| {
+                    format!(
+                        "{{\"hash\":\"{}\",\"size\":{},\"ts\":{},\"provider\":\"{}\"}}",
+                        json_escape(&h),
+                        it.size,
+                        it.ts,
+                        json_escape(&it.provider)
+                    )
+                })
+                .collect();
+            (
+                "200 OK",
+                JSON,
+                format!(
+                    "{{\"enabled\":true,\"mediaEndpointId\":\"{}\",\"bytes\":{},\"limitBytes\":{},\"items\":[{}]}}",
+                    m.endpoint_id,
+                    m.bytes.load(Ordering::Relaxed),
+                    m.limit,
+                    items.join(",")
+                ),
+            )
+        }
+        _ => ("200 OK", "text/html; charset=utf-8", metrics.html()),
     }
 }
 
@@ -1329,8 +1539,18 @@ async fn metrics_logger(metrics: Arc<Metrics>, interval_secs: u64) {
         tokio::time::sleep(interval).await;
         let bytes = metrics.bytes.load(Ordering::Relaxed);
         let up = metrics.uptime_secs();
+        let media_s = match &metrics.media {
+            Some(m) => format!(
+                " · media {} file(s) {:.3}/{} GB",
+                m.items.load(Ordering::Relaxed),
+                m.bytes.load(Ordering::Relaxed) as f64 / 1e9,
+                metrics.media_storage_gb
+            ),
+            None => String::new(),
+        };
         tracing::info!(
-            "STATS · uptime {}h{:02}m · seeding {} app(s) · {:.3}/{} GB · last acks {}/{}",
+            "STATS · v{} · uptime {}h{:02}m · seeding {} app(s) · {:.3}/{} GB · last acks {}/{}{}",
+            VERSION,
             up / 3600,
             (up % 3600) / 60,
             metrics.apps.load(Ordering::Relaxed),
@@ -1338,6 +1558,7 @@ async fn metrics_logger(metrics: Arc<Metrics>, interval_secs: u64) {
             metrics.storage_limit_gb,
             metrics.last_acks.load(Ordering::Relaxed),
             metrics.trackers,
+            media_s,
         );
     }
 }
@@ -1385,9 +1606,11 @@ async fn main() {
         if incentivized { "ON — priority eviction active" } else { "OFF — standard P2P seeding" }
     );
     tracing::info!(
-        "SmartNet seeder starting · data_dir={} · budget={:.1} GB · trackers={} · reward={}",
+        "SmartNet seeder v{} starting · data_dir={} · budget={:.1} GB · media={:.1} GB · trackers={} · reward={}",
+        VERSION,
         cfg.data_dir,
         cfg.storage_limit_gb,
+        cfg.media_storage_gb,
         cfg.trackers.len(),
         if reward.is_empty() { "(none)" } else { &reward }
     );
@@ -1499,6 +1722,22 @@ async fn main() {
         let st = state.lock().await;
         (st.len(), st.values().map(|s| s.size).sum::<u64>())
     };
+    // Медиа-сидинг мессенджера: отдельный store/endpoint, только если задан бюджет.
+    let media_seeder = if cfg.media_storage_gb > 0.0 {
+        if cfg.media_storage_gb < 0.1 {
+            tracing::warn!("media_storage_gb={} too small — effective media budget is 0.1 GB", cfg.media_storage_gb);
+        }
+        match media::MediaSeeder::start(&cfg.data_dir, cfg.media_storage_gb, cfg.relay_only).await {
+            Ok(m) => Some(m),
+            Err(e) => {
+                tracing::error!("media seeding disabled — failed to start media node: {}", e);
+                None
+            }
+        }
+    } else {
+        tracing::info!("media seeding OFF (set media_storage_gb: <GB> in config.yaml to enable)");
+        None
+    };
     let metrics = Arc::new(Metrics {
         started: Instant::now(),
         apps: AtomicUsize::new(init_apps),
@@ -1512,7 +1751,27 @@ async fn main() {
         dht_port: cfg.dht_port,
         dht_nodes: AtomicU64::new(0),
         fetch: std::sync::Mutex::new(HashMap::new()),
+        media: media_seeder,
+        media_storage_gb: cfg.media_storage_gb,
     });
+    // Таблица диагностики сразу содержит ВСЕ восстановленные с диска приложения —
+    // иначе «APPS SEEDED: 20», а в списке лишь те, что качались в этом запуске.
+    {
+        let st = state.lock().await;
+        for (id, s) in st.iter() {
+            metrics.set_fetch(
+                id,
+                FetchEntry {
+                    name: s.announce.name.clone(),
+                    provider: if s.provider.is_empty() { "(disk)".to_string() } else { s.provider.clone() },
+                    status: "ok",
+                    detail: String::new(),
+                    bytes: s.size,
+                    updated: Instant::now(),
+                },
+            );
+        }
+    }
     // Телеметрия DHT bootstrap-узла: каждые 12с пишем размер таблицы маршрутизации.
     if let Some(d) = node.dht.clone() {
         let m = metrics.clone();
@@ -1565,6 +1824,7 @@ async fn main() {
                 let mut st = state.lock().await;
                 for id in &deleted {
                     if st.remove(id).is_some() {
+                        metrics.remove_fetch(id);
                         removed += 1;
                     }
                 }
@@ -1669,6 +1929,7 @@ async fn main() {
                             break;
                         }
                         if st.remove(&id).is_some() {
+                            metrics.remove_fetch(&id);
                             used_now = used_now.saturating_sub(sz);
                             freed += sz;
                             removed += 1;
@@ -1732,6 +1993,7 @@ async fn main() {
                         .map(|(k, s)| (k.clone(), s.size))
                     {
                         st.remove(&evict_id);
+                        metrics.remove_fetch(&evict_id);
                         used = used.saturating_sub(sz);
                         save_state(&cfg, &st);
                         tracing::info!(
@@ -1810,6 +2072,7 @@ async fn main() {
                             size,
                             weight: tgt.weight,
                             boost: tgt.boost,
+                            provider: provider_short.clone(),
                             announce,
                         },
                     );
