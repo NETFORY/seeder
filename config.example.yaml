@@ -15,9 +15,7 @@ storage_limit_gb: 5.0
 media_storage_gb: 0
 
 # HTTP trackers to learn the app directory from and announce to.
-trackers:
-  - http://159.69.188.60:7374
-  - http://91.99.119.119:7374
+trackers: []
 
 # Where future seeding rewards should go. Provide EITHER an address ...
 reward_address: ""
