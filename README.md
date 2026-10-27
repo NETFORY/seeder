@@ -50,12 +50,12 @@ metrics_interval_secs: 300         # also print a one-line STATS summary this of
 
 The seeder serves a tiny dependency-free HTTP endpoint on `metrics_port`:
 
-- `GET /metrics` → JSON: `{ uptimeSecs, appsSeeded, bytesSeeded, gbSeeded,
+- `GET /metrics` -> JSON: `{ uptimeSecs, appsSeeded, bytesSeeded, gbSeeded,
   storageLimitGb, endpointId, rewardAddress, trackers, lastAnnounceAcks }`
-- `GET /` → a small dark status page (uptime, apps, GB, acks, reward address).
+- `GET /` -> a small dark status page (uptime, apps, GB, acks, reward address).
 
 It also prints a one-line `STATS · uptime … · seeding N app(s) · X/Y GB · last
-acks …` summary to the log every `metrics_interval_secs`. VPS operators can
+acks ...` summary to the log every `metrics_interval_secs`. VPS operators can
 scrape `/metrics` (Prometheus-style polling) to see their contribution, and the
 `rewardAddress` ties that contribution to a payout identity for future
 seeding-reward ranking.
