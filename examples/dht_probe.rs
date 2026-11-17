@@ -1,7 +1,7 @@
-// Reproduction of the client DHT monitor logic: extra_bootstrap (preserves default
-// public routers) + build on blocking pool + bootstrapped + routing_table_size.
-// Expected: DHT_NODES > 0 (entry into Mainline via default routers even if
-// SmartNet node is unavailable). This proves the fix for the "0 nodes" regression.
+// Репродукция логики DHT-монитора клиента: extra_bootstrap (сохраняет дефолтные
+// публичные роутеры) + build на blocking-пуле + bootstrapped + routing_table_size.
+// Ожидаемо: DHT_NODES > 0 (вход в Mainline через дефолтные роутеры даже если
+// SmartNet-узел недоступен). Это доказывает фикс регрессии «0 узлов».
 use n0_mainline::Dht;
 
 #[tokio::main]
