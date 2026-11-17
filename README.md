@@ -1,7 +1,5 @@
 # smartnet-seeder
 
-![SmartNetSeeder.jpg](resources/SmartNetSeeder.jpg)
-
 Headless, GUI-less P2P **seeder** for the SmartNet network. Run it on any cheap
 VPS (no X / no webkit) to keep dApps alive 24/7 - it learns the app directory
 from the trackers, pulls each app's content-addressed blob over iroh-blobs and
@@ -50,9 +48,37 @@ metrics_interval_secs: 300         # also print a one-line STATS summary this of
 
 The seeder serves a tiny dependency-free HTTP endpoint on `metrics_port`:
 
-- `GET /metrics` -> JSON: `{ uptimeSecs, appsSeeded, bytesSeeded, gbSeeded,
-  storageLimitGb, endpointId, rewardAddress, trackers, lastAnnounceAcks }`
-- `GET /` -> a small dark status page (uptime, apps, GB, acks, reward address).
+- `GET /metrics` -> JSON: `{ version, uptimeSecs, appsSeeded, bytesSeeded, gbSeeded,
+  storageLimitGb, endpointId, rewardAddress, trackers, lastAnnounceAcks,
+  mediaEnabled, mediaStorageGb, mediaBytes, mediaItems, mediaEndpointId, apps[] }`
+- `GET /` -> a small dark status page (version, uptime, apps, GB, media, acks, reward address).
+
+## Messenger media seeding (Netfory chats) - v1.5.0
+
+Chat media (photos / audio / files / video ≤ 500 MB) normally lives only on the
+sender's machine and on peers that already downloaded it - once the author goes
+offline the media is unreachable. With `media_storage_gb` > 0 the seeder becomes
+an always-on media mirror:
+
+```yaml
+media_storage_gb: 5      # 0 = off (default). e.g. 5 = 5 GB dedicated to chat media
+```
+
+- Fully **separate** from the dApp store: own `<data_dir>/media-blobs` FsStore,
+  own iroh endpoint (`media.key`, shown as `mediaEndpointId`), own `media.json`
+  state and own GC - the dApp budget (`storage_limit_gb`) is never touched.
+- Netfory clients discover media-capable seeders via the tracker (`/seeders` ->
+  seeder `/metrics` with a non-empty `mediaEndpointId`) and, right after sending
+  a media message, `POST /media/announce {"h": <hash>, "n": <sender media
+  endpoint>, "s": <size>, "p": [extra providers]}`. The seeder pulls the blob
+  immediately (up to 3 parallel fetches, 4 attempts each) and re-serves it 24/7.
+  Receivers add `mediaEndpointId` to their provider list, so media loads even
+  when the author is offline.
+- Hygiene: when usage (+ incoming file) exceeds **90 %** of the media budget the
+  **oldest 50 %** (by bytes) is dropped; the store GC reclaims the blobs.
+- Endpoints: `POST /media/announce`, `GET /media/has?h=<hash>`, `GET /media`
+  (list, newest first, ≤ 500). The status page shows `MEDIA X GB / Y GB · N files`
+  and the header `// SMARTNET SEEDER v<version>`.
 
 It also prints a one-line `STATS · uptime ... · seeding N app(s) · X/Y GB · last
 acks ...` summary to the log every `metrics_interval_secs`. VPS operators can
